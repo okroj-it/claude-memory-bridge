@@ -349,6 +349,51 @@ function doLink(mappings: ProjectMapping[]): { created: number; updated: number;
   return { created, updated, skipped };
 }
 
+/**
+ * Create a single symlink bridging a local encoded path to a remote project dir.
+ */
+function doLinkSingle(localDirName: string, remoteFullPath: string): void {
+  const localClaudeProjects = join(homedir(), ".claude", "projects");
+  if (!existsSync(localClaudeProjects)) {
+    mkdirSync(localClaudeProjects, { recursive: true });
+  }
+
+  const localFullPath = join(localClaudeProjects, localDirName);
+
+  if (existsSync(localFullPath)) {
+    const stat = lstatSync(localFullPath);
+    if (stat.isSymbolicLink()) {
+      unlinkSync(localFullPath);
+    } else {
+      console.log(`  ${RED}✗${RESET} Local directory already exists: ${localFullPath}`);
+      console.log(`  ${DIM}Remove it manually if you want to bridge this project.${RESET}`);
+      return;
+    }
+  }
+
+  symlinkSync(remoteFullPath, localFullPath);
+  console.log(`  ${GREEN}✓${RESET} Linked!`);
+  console.log(`    ${localDirName}`);
+  console.log(`    ${DIM}→ ${remoteFullPath}${RESET}`);
+}
+
+/**
+ * List all project directories in a remote .claude/projects/ path.
+ */
+function listRemoteProjects(sourcePath: string): { dirName: string; fullPath: string }[] {
+  if (!existsSync(sourcePath)) return [];
+  return readdirSync(sourcePath, { withFileTypes: true })
+    .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && e.name.startsWith("-"))
+    .map((e) => ({ dirName: e.name, fullPath: join(sourcePath, e.name) }));
+}
+
+/**
+ * Get the encoded directory name for the current working directory.
+ */
+function cwdEncodedName(): string {
+  return encodePrefix(resolve(process.cwd()));
+}
+
 // --- Interactive Wizard ---
 
 async function cmdWizard(): Promise<void> {
@@ -467,23 +512,86 @@ async function cmdWizard(): Promise<void> {
     }
   }
 
-  // Step 4: Discover and preview
-  console.log(`\n  Discovering projects...\n`);
-  const mappings = discoverMappings(sourcePath, remotePrefix, localPrefix);
+  // Step 4: Check if running inside a project directory
+  const cwdName = cwdEncodedName();
+  const remoteProjects = listRemoteProjects(sourcePath);
+  const allMappings = discoverMappings(sourcePath, remotePrefix, localPrefix);
 
+  // Does the cwd match a remote project via prefix mapping?
+  const cwdMapping = allMappings.find((m) => m.localDirName === cwdName);
+
+  if (cwdMapping) {
+    // Case 1: CWD matches a remote project
+    console.log(`\n  ${GREEN}✓${RESET} Current directory matches remote project:`);
+    console.log(`    ${BOLD}${cwdMapping.sourceDirName}${RESET}  ${stateIcon(cwdMapping.localState)}`);
+
+    if (cwdMapping.localState === "symlink-correct") {
+      console.log(`\n  Already bridged! Nothing to do.\n`);
+    } else if (cwdMapping.localState === "directory-exists") {
+      console.log(`\n  ${YELLOW}!${RESET} Local directory exists. Remove it manually to bridge.\n`);
+    } else {
+      const proceed = await confirm(`\n  Bridge this project?`);
+      if (proceed) {
+        doLinkSingle(cwdMapping.localDirName, cwdMapping.sourceFullPath);
+      } else {
+        console.log(`\n  Cancelled.\n`);
+      }
+    }
+  } else if (remoteProjects.length > 0 && cwdName.length > 3) {
+    // Case 2: In a project dir but no prefix-based match — let user pick manually
+    console.log(`\n  ${YELLOW}!${RESET} Current directory ${DIM}(${cwdName})${RESET}`);
+    console.log(`  No automatic match found in remote projects.\n`);
+
+    const bridgeManually = await confirm(`  Pick a remote project to bridge to this directory?`);
+
+    if (bridgeManually) {
+      const selected = await multiSelect(
+        "Which remote project should this directory bridge to?",
+        remoteProjects,
+        (p) => p.dirName,
+      );
+
+      if (selected.length === 1) {
+        const proceed = await confirm(`\n  Bridge ${BOLD}${cwdName}${RESET}\n      → ${BOLD}${selected[0].dirName}${RESET}?`);
+        if (proceed) {
+          doLinkSingle(cwdName, selected[0].fullPath);
+        } else {
+          console.log(`\n  Cancelled.\n`);
+        }
+      } else if (selected.length > 1) {
+        console.log(`\n  ${RED}Pick just one project to bridge to the current directory.${RESET}\n`);
+      } else {
+        console.log(`\n  Nothing selected. Cancelled.\n`);
+      }
+    } else {
+      // Fall through to bulk mode
+      await wizardBulkLink(allMappings, sourcePath, remotePrefix, localPrefix);
+    }
+  } else {
+    // Case 3: Not in a project dir (or cwd is ~/) — bulk mode
+    await wizardBulkLink(allMappings, sourcePath, remotePrefix, localPrefix);
+  }
+
+  closeRL();
+}
+
+async function wizardBulkLink(
+  mappings: ProjectMapping[],
+  sourcePath: string,
+  remotePrefix: string,
+  localPrefix: string,
+): Promise<void> {
   const linkable = mappings.filter((m) => m.localState === "missing" || m.localState === "symlink-wrong");
   const linked = mappings.filter((m) => m.localState === "symlink-correct");
   const conflicts = mappings.filter((m) => m.localState === "directory-exists");
 
-  console.log(`  ${GREEN}${linked.length}${RESET} already linked, ${CYAN}${linkable.length}${RESET} linkable, ${YELLOW}${conflicts.length}${RESET} conflicts\n`);
+  console.log(`\n  ${GREEN}${linked.length}${RESET} already linked, ${CYAN}${linkable.length}${RESET} linkable, ${YELLOW}${conflicts.length}${RESET} conflicts\n`);
 
   if (linkable.length === 0) {
     console.log(`  Nothing to do — all projects are already bridged!\n`);
-    closeRL();
     return;
   }
 
-  // Step 5: Pick which projects to bridge
   const selected = await multiSelect(
     "Which projects do you want to bridge?",
     linkable,
@@ -495,18 +603,14 @@ async function cmdWizard(): Promise<void> {
 
   if (selected.length === 0) {
     console.log(`\n  Nothing selected. Cancelled.\n`);
-    closeRL();
     return;
   }
 
   const { created, updated, skipped } = doLink(selected);
   console.log(`\n  ${GREEN}✓${RESET} ${BOLD}Done:${RESET} ${created} created, ${updated} updated, ${skipped} skipped`);
 
-  // Step 6: Show the command for next time
   console.log(`\n  ${DIM}Next time, run non-interactively:${RESET}`);
   console.log(`  ${DIM}claude-memory-bridge link --source '${sourcePath}' --map '${remotePrefix}=${localPrefix}'${RESET}\n`);
-
-  closeRL();
 }
 
 // --- Non-interactive commands ---
