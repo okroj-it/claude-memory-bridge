@@ -42,11 +42,43 @@ Just run it — it auto-detects everything:
 claude-memory-bridge
 ```
 
-The wizard will:
-1. 🔍 Scan mounted filesystems for remote Claude installations
-2. 🧭 Auto-detect path prefix mappings
-3. 🎯 Let you pick which projects to bridge
-4. 🔗 Create symlinks for your selection
+The wizard is **cwd-aware** — behavior depends on where you run it:
+
+#### 📂 Inside a project directory
+
+If a matching remote project is found, it offers to bridge just that one:
+
+```
+  ✓ Current directory matches remote project:
+    -home-user-projects-myapp  --
+
+  Bridge this project? [Y/n]
+```
+
+If **no automatic match** is found (different directory structures between systems), it lets you manually pick which remote project to bridge to:
+
+```
+  ! Current directory (-mnt-disk-work-myapp)
+  No automatic match found in remote projects.
+
+  Pick a remote project to bridge to this directory? [Y/n]
+
+  Which remote project should this directory bridge to?
+
+      1) -home-user-projects-myapp
+      2) -home-user-projects-api-server
+      3) -home-user-work-dashboard
+
+  Select: 1
+  ✓ 1 selected
+
+  Bridge -mnt-disk-work-myapp
+      → -home-user-projects-myapp? [Y/n]
+```
+
+#### 🌐 Outside a project directory (or from ~/)
+
+Shows all remote projects and lets you pick which ones to bridge:
 
 ```
   Which projects do you want to bridge?
