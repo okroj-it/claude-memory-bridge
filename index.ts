@@ -67,6 +67,63 @@ async function choose(question: string, options: string[]): Promise<number> {
   }
 }
 
+/**
+ * Parse a selection string like "1,3,5-8,10" into a Set of 0-based indices.
+ */
+function parseSelection(input: string, max: number): Set<number> {
+  const selected = new Set<number>();
+  for (const part of input.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const range = trimmed.split("-");
+    if (range.length === 2) {
+      const start = parseInt(range[0], 10);
+      const end = parseInt(range[1], 10);
+      if (!isNaN(start) && !isNaN(end)) {
+        for (let i = Math.max(1, start); i <= Math.min(max, end); i++) {
+          selected.add(i - 1);
+        }
+      }
+    } else {
+      const num = parseInt(trimmed, 10);
+      if (!isNaN(num) && num >= 1 && num <= max) {
+        selected.add(num - 1);
+      }
+    }
+  }
+  return selected;
+}
+
+async function multiSelect<T>(
+  question: string,
+  items: T[],
+  label: (item: T, index: number) => string,
+): Promise<T[]> {
+  console.log(`\n  ${BOLD}${question}${RESET}\n`);
+  for (let i = 0; i < items.length; i++) {
+    console.log(`    ${CYAN}${String(i + 1).padStart(3)}${RESET}) ${label(items[i], i)}`);
+  }
+  console.log();
+  console.log(`  ${DIM}Enter numbers/ranges: 1,3,5-8  ·  a = all  ·  n = none${RESET}`);
+
+  while (true) {
+    const answer = await ask(`\n  Select: `);
+    const lower = answer.toLowerCase().trim();
+
+    if (lower === "a" || lower === "all") return [...items];
+    if (lower === "n" || lower === "none" || lower === "") return [];
+
+    const selected = parseSelection(answer, items.length);
+    if (selected.size > 0) {
+      const result = [...selected].sort((a, b) => a - b).map((i) => items[i]);
+      console.log(`  ${GREEN}✓${RESET} ${result.length} selected`);
+      return result;
+    }
+
+    console.log(`  ${RED}Invalid selection. Use numbers, ranges (1-5), commas, 'a' for all, 'n' for none.${RESET}`);
+  }
+}
+
 // --- Path encoding ---
 
 function encodePrefix(prefix: string): string {
@@ -418,21 +475,7 @@ async function cmdWizard(): Promise<void> {
   const linked = mappings.filter((m) => m.localState === "symlink-correct");
   const conflicts = mappings.filter((m) => m.localState === "directory-exists");
 
-  // Compact table view
-  console.log(`  ${BOLD}${mappings.length} project(s) found:${RESET}\n`);
-  const maxNameLen = Math.min(
-    50,
-    Math.max(...mappings.map((m) => m.sourceDirName.length)),
-  );
-
-  for (const m of mappings) {
-    const name = m.sourceDirName.length > 50
-      ? "..." + m.sourceDirName.slice(-47)
-      : m.sourceDirName.padEnd(maxNameLen);
-    console.log(`    ${name}  ${stateIcon(m.localState)}`);
-  }
-
-  console.log(`\n  ${GREEN}${linked.length}${RESET} already linked, ${CYAN}${linkable.length}${RESET} to link, ${YELLOW}${conflicts.length}${RESET} conflicts\n`);
+  console.log(`  ${GREEN}${linked.length}${RESET} already linked, ${CYAN}${linkable.length}${RESET} linkable, ${YELLOW}${conflicts.length}${RESET} conflicts\n`);
 
   if (linkable.length === 0) {
     console.log(`  Nothing to do — all projects are already bridged!\n`);
@@ -440,15 +483,23 @@ async function cmdWizard(): Promise<void> {
     return;
   }
 
-  // Step 5: Confirm and link
-  const proceed = await confirm(`  Create ${BOLD}${linkable.length}${RESET} symlink(s)?`);
-  if (!proceed) {
-    console.log(`\n  Cancelled.\n`);
+  // Step 5: Pick which projects to bridge
+  const selected = await multiSelect(
+    "Which projects do you want to bridge?",
+    linkable,
+    (m) => {
+      const tag = m.localState === "symlink-wrong" ? ` ${YELLOW}(update)${RESET}` : "";
+      return `${m.sourceDirName}${tag}`;
+    },
+  );
+
+  if (selected.length === 0) {
+    console.log(`\n  Nothing selected. Cancelled.\n`);
     closeRL();
     return;
   }
 
-  const { created, updated, skipped } = doLink(mappings);
+  const { created, updated, skipped } = doLink(selected);
   console.log(`\n  ${GREEN}✓${RESET} ${BOLD}Done:${RESET} ${created} created, ${updated} updated, ${skipped} skipped`);
 
   // Step 6: Show the command for next time
