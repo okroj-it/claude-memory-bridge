@@ -45,8 +45,21 @@ claude-memory-bridge
 The wizard will:
 1. 🔍 Scan mounted filesystems for remote Claude installations
 2. 🧭 Auto-detect path prefix mappings
-3. 📋 Preview what will be linked
-4. 🔗 Create symlinks with your confirmation
+3. 🎯 Let you pick which projects to bridge
+4. 🔗 Create symlinks for your selection
+
+```
+  Which projects do you want to bridge?
+
+      1) -home-user-projects-myapp
+      2) -home-user-projects-api-server
+      3) -home-user-work-dashboard
+
+  Enter numbers/ranges: 1,3,5-8  ·  a = all  ·  n = none
+
+  Select: 1,3
+  ✓ 2 selected
+```
 
 ### Non-Interactive
 
